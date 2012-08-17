@@ -1,0 +1,5 @@
+twisted
+pyserial
+psutil
+watchdog
+ipdb

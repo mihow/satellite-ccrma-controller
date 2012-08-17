@@ -1,0 +1,20 @@
+#N canvas 295 310 450 300 10;
+#X obj 143 193 dac~;
+#X obj 33 146 osc~ 228;
+#X obj 109 103 phasor~ 161;
+#X obj 140 135 phasor~ 229;
+#X msg 163 53 \; pd dsp 1 \;;
+#X obj 165 5 loadbang;
+#X msg 253 47 \; pd dsp 0 \;;
+#X obj 40 82 osc~ 160;
+#X obj 144 5 bng 15 250 50 0 empty empty empty 17 7 0 10 -262144 -1
+-1;
+#X obj 161 30 delay 10;
+#X connect 1 0 0 0;
+#X connect 1 0 0 1;
+#X connect 2 0 0 0;
+#X connect 3 0 0 1;
+#X connect 5 0 9 0;
+#X connect 7 0 0 1;
+#X connect 8 0 9 0;
+#X connect 9 0 4 0;

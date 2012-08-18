@@ -46,6 +46,9 @@ class PuredataWatcher(ProcessProtocol):
 
 class ArduinoController(LineReceiver):
 
+    def __init__(self):
+        self.data = ""
+
     def connectionMade(self):
         log.info("Arudino Connected")
 
@@ -72,8 +75,14 @@ class ArduinoController(LineReceiver):
             import ipdb; ipdb.set_trace()
 
     def dataReceived(self, data):
-        # log.debug(data)
-
+        self.data += data
+        if 'button 1' in self.data:
+            if main_controller.pd_running():
+                main_controller.stop_puredata()
+            else:
+                main_controller.start_puredata()
+	    log.debug(self.data)
+	    self.data = ""
         pass
 
 
@@ -155,13 +164,15 @@ class SatelliteCCRMAController(object):
         # OR send message to Pd patch lowering the vol? would depend on patch.
         if self.pd_running():
             log.info("Killing PD patch")
-            self.puredata.signalProcess('TERM') # How to avoid "defunct" state in 'ps' output?
-            self.puredata.signalProcess('KILL')
-            # psutil.Process(self.puredata.transport.pid).wait(0)
-
-            # Try and kill everything Pd:
-            [p.wait() for p in self.find_process()] # this works
-            return True
+            try:
+                self.puredata.signalProcess('TERM') # How to avoid "defunct" state in 'ps' output?
+                #self.puredata.signalProcess('KILL')
+                # psutil.Process(self.puredata.transport.pid).wait(0)
+                # Try and kill everything Pd:
+                #[p.wait() for p in self.find_process()] # this works
+                return True
+            except OSError:
+                pass
         return False
 
     def pd_running(self):
@@ -201,8 +212,8 @@ class SatelliteCCRMAController(object):
         procs = self.find_process(process_name)
         for proc in procs:
             proc.terminate()
-            proc.wait(3)
-            proc.kill()
+            # proc.wait(3)
+            # proc.kill()
             log.debug("Killed %s" % proc)
         # subprocess.call(['killall', process_name])
 

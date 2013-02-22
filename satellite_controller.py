@@ -15,6 +15,7 @@ from twisted.internet import reactor
 from twisted.python import filepath
 from watchdog.observers import Observer
 from watchdog.events import LoggingEventHandler
+from watchdog.events import PatternMatchingEventHandler
 import psutil
 
 log = logging
@@ -26,22 +27,21 @@ DEFAULT_PATCH = os.path.join(os.path.dirname(__file__), 'soundcheck.pd')
 class PuredataWatcher(ProcessProtocol):
 
     def connectionMade(self):
-        log.info("Puredata Launched / Connected to stdin. PID: %s" %
+        log.info("Pure Data Launched with PID: %s" %
                 self.transport.pid)
         if not main_controller.find_process(): # Double onfirm it's running
             log.error("Process checker says Pd isn't actually running")
 
     def outReceived(self, data):
-        log.info("Output from Pd: %s" % data)
+        # log.info("Output from Pd: %s" % data)
+        pass
 
     def errReceived(self, data):
-        log.warn("Error from Pd: %s" % data)
+        # log.warn("Error from Pd: %s" % data)
+        pass
 
     def processExited(self, reason):
-        log.info("Pd Process Exited. Reason: %s" % reason)
-
-    def processEnded(self, reason):
-        log.info("Pd Process Ended. Reason: %s" % reason)
+        log.info("Pure Data Quit: %s" % reason.value.message)
 
 
 class ArduinoController(LineReceiver):
@@ -51,11 +51,12 @@ class ArduinoController(LineReceiver):
 
     def connectionMade(self):
         log.info("Arudino Connected")
+        self.transport.write("LED1\n")
+        self.transport.write("LED1\n")
+        self.transport.write("LED1\n")
 
     def connectionLost(self, reason):
-        log.warning("Arduino serial connection lost: %s" % reason)
-        log.info("How can we make a graceful exit with Ctrl+C ?")
-        main_controller.start_arduino()
+        log.warning("Arduino serial connection lost: %s" % reason.value.message)
         # @TODO maybe raise SerialException instead and restart from main_controller?
         # When quitting the program arudino starts back up
 
@@ -75,27 +76,54 @@ class ArduinoController(LineReceiver):
             import ipdb; ipdb.set_trace()
 
     def dataReceived(self, data):
-        self.data += data
-        if 'button 1' in self.data:
-            if main_controller.pd_running():
-                main_controller.stop_puredata()
-            else:
-                main_controller.start_puredata()
-	    log.debug(self.data)
-	    self.data = ""
-        pass
+        if data in ['\n', '\r']: # If the end of the line
+            log.debug("Line of serial data: %s" % self.data)
+            if 'button 1' in self.data:
+                log.info('Button pressed')
+                if main_controller.pd_running():
+                    main_controller.stop_puredata()
+                else:
+                    main_controller.start_puredata()
+    	        self.data = ""
+        else:
+            self.data += data
 
 
 class FileSystemWatcher(LoggingEventHandler):
     # Rename to specific purpose when we have one (Jackd log watcher)
-    '''
-    def on_any_event(self, event):
-        log.info(event)
-
-    def on_modified(self, event):
-        log.info(event)
-    '''
     pass
+
+
+class ConnectedDevicesWatcher(PatternMatchingEventHandler):
+    def __init__(self, *args, **kwargs):
+        super(ConnectedDevicesWatcher, self).__init__(*args, **kwargs)
+        # Look for device already connected at startup
+        ports = []
+        log.debug("Looking for device matching '%s'" % self.patterns)
+        ports = glob.glob(*self.patterns)
+        if ports:
+            self.open_device(ports[0])
+
+    def on_created(self, event):
+        log.info(event)
+        if not main_controller.arduino:
+            self.open_device(event.src_path)
+
+    def on_deleted(self, event):
+        log.info(event)
+        if event.src_path == main_controller.arduino_port: # The arduino we want
+            main_controller.arduino_port = None
+            main_controller.arduino = None
+
+    def on_any_event(self, event):
+        pass
+        # log.info(event)
+
+    def open_device(self, port):
+        log.info("Arduino found at: %s" % port)
+        time.sleep(1)
+        main_controller.arduino_port = port
+        main_controller.start_arduino()
 
 
 class JackWatcher(ProcessProtocol):
@@ -116,16 +144,19 @@ class SatelliteCCRMAController(object):
         self.puredata = None # Make empty Process instance instead?
         self.filewatcher = None # Make more specific
         self.arduino = None
+        self.arduino_port = None
 
     def start(self):
         try:
-            self.start_filewatcher()
             self.start_puredata()
-            self.start_arduino()
+            self.start_devicewatcher()
+            # self.start_arduino()
+            # self.start_filewatcher()
             reactor.run()
 
         except KeyboardInterrupt:
             log.debug("Keybord Interrupt")
+            log.info("How can we close the Arduino gracefully with Ctrl+C ?")
             self.stop_puredata()
             self.find_process()
             import ipdb; ipdb.set_trace()
@@ -134,10 +165,14 @@ class SatelliteCCRMAController(object):
         reactor.stop()
 
     def start_arduino(self):
-        self.port = self.get_arduino_port()
-        self.baudrate = 9600
-        log.info("Opening Arduino on port: %s" % self.port)
-        self.arduino = SerialPort(ArduinoController(), self.port, reactor, self.baudrate)
+        if self.arduino_port: 
+            port = self.arduino_port
+            baudrate = 9600
+            log.info("Opening Arduino on port: %s" % port)
+	    main_controller.arduino = SerialPort(ArduinoController(), 
+					         port, reactor, baudrate)
+        # log.info("Opening Arduino on port: %s" % self.port)
+        # self.arduino = SerialPort(ArduinoController(), self.port, reactor, self.baudrate)
 
     def start_filewatcher(self):
         path_to_watch = os.environ['HOME']
@@ -145,6 +180,11 @@ class SatelliteCCRMAController(object):
         self.filewatcher.schedule(FileSystemWatcher(), path=path_to_watch, recursive=False)
         log.info("Watching for file changes to: %s" % path_to_watch)
         self.filewatcher.start()
+
+    def start_devicewatcher(self):
+        self.devicewatcher = Observer()
+        self.devicewatcher.schedule(ConnectedDevicesWatcher(patterns=['/dev/tty*']), path='/dev/')
+        self.devicewatcher.start()
 
     def start_puredata(self, *args):
         # @TODO Raise system volume to where it was (or 100%)
@@ -218,16 +258,14 @@ class SatelliteCCRMAController(object):
         # subprocess.call(['killall', process_name])
 
     def get_arduino_port(self, pattern='/dev/ttyUSB*'):
-        ''' Wait for Arduino to be connected and return it's port. '''
-        # Could use watchdog here as well, wait for changes to /dev/
-        # Or monitor dmesg or kern.log ?
+        ''' See if Arduino is already connected and return it's port. '''
         ports = []
-        log.debug("Looking for USB device matching '%s'" % pattern)
-        while not ports:
-            ports = glob.glob(pattern)
+        log.debug("Looking for device matching '%s'" % pattern)
+        ports = glob.glob(pattern)
+        if ports:
             time.sleep(1)
-        log.info("Arduino found at: %s" % ports[0])
-        return ports[0]
+            log.info("Arduino found at: %s" % ports[0])
+            return ports[0]
 
 
 main_controller = SatelliteCCRMAController()
